@@ -1217,5 +1217,43 @@ def analyze(
     run_analysis(checkpoint=checkpoint)
 
 
+@app.command(name="codex-login")
+def codex_login_cmd(
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Don't open the browser automatically — print the URL instead.",
+    ),
+    timeout: int = typer.Option(
+        300,
+        "--timeout",
+        help="Seconds to wait for the OAuth callback before giving up.",
+    ),
+):
+    """Authenticate against your ChatGPT Plus/Pro subscription for the openai_codex provider."""
+    from tradingagents.llm_clients.codex_oauth import auth as codex_auth
+
+    try:
+        codex_auth.login(open_browser=not no_browser, timeout_seconds=timeout)
+    except codex_auth.CodexAuthError as exc:
+        console.print(f"[red]Codex login failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+@app.command(name="codex-status")
+def codex_status_cmd():
+    """Show whether Codex OAuth tokens are present and valid."""
+    from tradingagents.llm_clients.codex_oauth import auth as codex_auth
+
+    record = codex_auth.load_tokens()
+    if not record:
+        console.print("[yellow]No Codex tokens found.[/yellow] Run `tradingagents codex-login`.")
+        raise typer.Exit(code=1)
+    tokens = record.get("tokens") or {}
+    acct = tokens.get("account_id") or "<unknown>"
+    last = record.get("last_refresh") or "<unknown>"
+    console.print(f"[green]Codex tokens present.[/green] Account: {acct}  Last refresh: {last}")
+
+
 if __name__ == "__main__":
     app()
