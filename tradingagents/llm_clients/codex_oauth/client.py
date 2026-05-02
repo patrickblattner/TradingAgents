@@ -31,6 +31,14 @@ CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _ORIGINATOR = "codex_cli_rs"
 _USER_AGENT = "codex_cli_rs/0.0.0 (TradingAgents)"
 
+# The Codex backend rejects requests without `instructions` (HTTP 400
+# "Instructions are required") — the public Responses API treats it as
+# optional, but chatgpt.com/backend-api/codex does not. When LangChain doesn't
+# emit a system message, we synthesise a generic one so the request goes
+# through. Real TradingAgents agents always supply their own system prompt,
+# which then takes precedence.
+_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
+
 
 def codex_default_headers(access_token: str) -> dict:
     """Build the header set required by chatgpt.com/backend-api/codex."""
@@ -62,6 +70,11 @@ class CodexChatOpenAI(NormalizedChatOpenAI):
         payload.pop("max_output_tokens", None)
         # store=true is rejected by the ChatGPT backend (returns 400). Force false.
         payload["store"] = False
+        # The Codex backend mandates `instructions`. LangChain only sets it when
+        # a SystemMessage is present in the input — so synthesise a default for
+        # the bare-prompt case rather than 400ing.
+        if not str(payload.get("instructions") or "").strip():
+            payload["instructions"] = _DEFAULT_INSTRUCTIONS
         return payload
 
 
@@ -78,6 +91,11 @@ def build_codex_chat_model(model: str, **extra_kwargs: Any) -> CodexChatOpenAI:
         "base_url": CODEX_BASE_URL,
         "default_headers": codex_default_headers(access_token),
         "use_responses_api": True,
+        # Codex backend rejects non-streaming requests ("Stream must be set to true").
+        # LangChain's _generate falls through to _stream when this is True and
+        # collects chunks into a normal ChatResult, so callers see the same
+        # AIMessage interface.
+        "streaming": True,
     }
     init_kwargs.update(extra_kwargs)
     return CodexChatOpenAI(**init_kwargs)
