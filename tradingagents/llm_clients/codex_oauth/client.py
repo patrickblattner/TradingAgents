@@ -40,6 +40,46 @@ _USER_AGENT = "codex_cli_rs/0.0.0 (TradingAgents)"
 _DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
 
+def _extract_text_from_content(content: Any) -> str:
+    """Pull plain text out of a Responses API content field (string or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                # Responses API uses {"type": "input_text"|"output_text", "text": "..."}
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return ""
+
+
+def _hoist_system_messages(input_field: Any) -> tuple[str, Any]:
+    """Return (hoisted_text, input_without_system_items).
+
+    Walks the Responses API ``input`` field, extracts any items with role
+    ``system`` or ``developer``, joins their text into a single string, and
+    returns the input list with those items removed. Returns the input
+    unchanged when there's nothing to hoist.
+    """
+    if not isinstance(input_field, list):
+        return "", input_field
+    hoisted: list[str] = []
+    kept: list[Any] = []
+    for item in input_field:
+        if isinstance(item, dict) and item.get("role") in ("system", "developer"):
+            text = _extract_text_from_content(item.get("content"))
+            if text.strip():
+                hoisted.append(text.strip())
+            continue
+        kept.append(item)
+    return ("\n\n".join(hoisted), kept)
+
+
 def codex_default_headers(access_token: str) -> dict:
     """Build the header set required by chatgpt.com/backend-api/codex."""
     headers = {
@@ -70,11 +110,21 @@ class CodexChatOpenAI(NormalizedChatOpenAI):
         payload.pop("max_output_tokens", None)
         # store=true is rejected by the ChatGPT backend (returns 400). Force false.
         payload["store"] = False
-        # The Codex backend mandates `instructions`. LangChain only sets it when
-        # a SystemMessage is present in the input — so synthesise a default for
-        # the bare-prompt case rather than 400ing.
-        if not str(payload.get("instructions") or "").strip():
-            payload["instructions"] = _DEFAULT_INSTRUCTIONS
+        # Codex rejects system/developer messages inside `input` ("System messages
+        # are not allowed"); the system prompt must move to the `instructions`
+        # field. langchain-openai's Responses adapter doesn't hoist this for us
+        # in every shape, so we do it defensively.
+        existing_instructions = str(payload.get("instructions") or "").strip()
+        hoisted, filtered_input = _hoist_system_messages(payload.get("input"))
+        if hoisted:
+            existing_instructions = (
+                hoisted if not existing_instructions
+                else f"{existing_instructions}\n\n{hoisted}"
+            )
+            payload["input"] = filtered_input
+        if not existing_instructions:
+            existing_instructions = _DEFAULT_INSTRUCTIONS
+        payload["instructions"] = existing_instructions
         return payload
 
 
