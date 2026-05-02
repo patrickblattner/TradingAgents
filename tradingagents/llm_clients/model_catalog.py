@@ -119,7 +119,12 @@ MODEL_OPTIONS: ProviderModeOptions = {
 
 def get_model_options(provider: str, mode: str) -> List[ModelOption]:
     """Return shared model options for a provider and selection mode."""
-    return MODEL_OPTIONS[provider.lower()][mode]
+    key = provider.lower()
+    # The Codex OAuth provider points at the same OpenAI model namespace —
+    # share the catalog rather than duplicating it.
+    if key == "openai_codex":
+        key = "openai"
+    return MODEL_OPTIONS[key][mode]
 
 
 def get_known_models() -> Dict[str, List[str]]:
